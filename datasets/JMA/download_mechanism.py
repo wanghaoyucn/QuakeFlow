@@ -118,7 +118,7 @@ if __name__ == "__main__":
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
-    for year in tqdm(range(2020, 2021)):
+    for year in tqdm(range(2021, 2022)):
         if not os.path.exists(os.path.join(result_path, f"h{year}")):
             os.system(f"wget https://www.data.jma.go.jp/svd/eqev/data/bulletin/data/hypo/h{year}.zip -P {result_path}")
             os.system(f"unzip {os.path.join(result_path, f'h{year}.zip')} -d {result_path}")

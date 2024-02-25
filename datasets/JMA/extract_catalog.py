@@ -3,16 +3,23 @@ import gzip
 import multiprocessing as mp
 import os
 import re
+import json
 import shutil
 from collections import namedtuple
 from datetime import datetime, timedelta
 from glob import glob
 from pathlib import Path
+from functools import partial
 
 import numpy as np
 import obspy
 import pandas as pd
+import obspy.geodetics.base
 from tqdm import tqdm
+
+import warnings
+# remove DeprecationWarning in obspy.geodetics.base
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # %%
 root_path = "dataset"
@@ -76,7 +83,7 @@ event_decimal_number = {
 
 phase_columns = {
     "record_type":              (0, 1),                  
-    "station":                  (1, 7),   
+    "station_code":             (1, 7),   
     "station_number":           (7, 11),           
     "seismometer":              (12, 13),                   
     "date":                     (13, 15),           
@@ -154,12 +161,12 @@ def read_event_line(line):
         event["time"] = tmp.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
     event["latitude"] = round(event["latitude_deg"] + event["latitude_min"] / 60, 6)
-    event["longitude"] = round(-(event["longitude_deg"] + event["longitude_min"] / 60), 6)
+    event["longitude"] = round((event["longitude_deg"] + event["longitude_min"] / 60), 6)
     
     return event
 
 
-def read_phase_line(line):
+def read_phase_line(line, only_snet=True):
     ## check p_remark
     phases = []
     start, end = phase_columns["p_remark"]
@@ -196,6 +203,8 @@ def read_phase_line(line):
         p_phase["phase_score"] = ""
         p_phase["phase_type"] = p_phase["p_remark"].strip()[-1]
         p_phase["location_weight"] = p_phase["location_weight"]
+        # station code: N.101S -> station: N.S1N01
+        p_phase["station"] = f"{p_phase['station_code'][:2]}S{p_phase['station_code'][2]}N{p_phase['station_code'][3:5]}" if only_snet else p_phase['station_code']
         phases.append(p_phase)
     start, end = phase_columns["s_remark"]
     if len(line[start:end].strip()) > 0:
@@ -220,10 +229,12 @@ def read_phase_line(line):
             )
             tmp += timedelta(seconds=s_phase["arrival_time_s_second"])
             s_phase["phase_time"] = tmp.strftime("%Y-%m-%dT%H:%M:%S.%f")
-        s_phase["phase_remark"] = s_phase["s_remark"]
+        s_phase["phase_remark"] = s_phase["s_remark"].strip()
         s_phase["phase_score"] = ""
         s_phase["phase_type"] = s_phase["s_remark"].strip()[-1]
         s_phase["location_weight"] = s_phase["location_weight"]
+        # station code: N.101S -> station: N.S1N01
+        s_phase["station"] = f"{s_phase['station_code'][:2]}S{s_phase['station_code'][2]}N{s_phase['station_code'][3:5]}" if only_snet else s_phase['station_code']
         phases.append(s_phase)
 
     return phases
@@ -231,7 +242,7 @@ def read_phase_line(line):
 
 # %%
 # for year in range(1966, 2024)[::-1]:
-def process(year, only_snet=True):
+def process(year, stations_info, only_snet=True):
     for phase_file in sorted(glob(f"{catalog_path}/d{year}??"))[::-1]:
         phase_filename = phase_file.split("/")[-1]
 
@@ -244,13 +255,13 @@ def process(year, only_snet=True):
         event_id = None
         event = {}
         picks = []
-        for line in tqdm(lines, desc=phase_filename):
+        for line in tqdm(lines, desc=phase_filename+" parsing"):
             if line[0] == "C": # comment line
                 continue
             if line[0] == "E": # end line
                 if event_id is not None:
                     assert event["event_id"] == event_id
-                    if event["is_valid"]:
+                    if event["is_valid"] and len(picks) > 0:
                         catalog[event_id] = {"event": event, "picks": picks}
                     event_id = None
                     event = {}
@@ -274,14 +285,23 @@ def process(year, only_snet=True):
                     continue
                 if only_snet and (re.match(r"N.\d\d\dS", line[1:7]) is None):
                     continue # not S-net station
-                picks.extend(read_phase_line(line))
+                picks.extend(read_phase_line(line, only_snet=only_snet))
 
         events = []
         phases = []
-        for event_id in catalog.keys():
+        for event_id in tqdm(catalog.keys(), desc=phase_filename+" building"):
             events.append(catalog[event_id]["event"])
             phase = pd.DataFrame(catalog[event_id]["picks"])
             phase["event_id"] = event_id
+            assert 'station' in phase.columns, f'{phase_filename} {event_id} {phase.columns}'
+            # calc dist and azimuth with obspy
+            phase["dist_azi"] = phase['station'].apply(
+                lambda x: obspy.geodetics.base.gps2dist_azimuth(
+                    catalog[event_id]["event"]["latitude"], catalog[event_id]["event"]["longitude"], stations_info[x]["latitude"], stations_info[x]["longitude"]
+                    ))
+            phase["distance_km"] = phase["dist_azi"].apply(lambda x: round(x[0] / 1000, 6))
+            phase["azimuth"] = phase["dist_azi"].apply(lambda x: round(x[1], 6))
+            phase.drop(columns=["dist_azi"], inplace=True)
             phases.append(phase)
 
         events = pd.DataFrame(events)
@@ -292,13 +312,20 @@ def process(year, only_snet=True):
         events["event_id"] = events["event_id"].apply(lambda x: "jma" + x)
         events["time"] = events["time"].apply(lambda x: x + "+09:00")
         # TODO: calculate azimuth, distance_km, find takeoff_angle record？
-        phases["distance_km"] = ""
-        phases["azimuth"] = ""
         phases["takeoff_angle"] = ""
+        phases["network"] = "S-net" if only_snet else "JMA"
+        phases["location"] = ""
+        phases["instrument"] = ""
+        phases["component"] = "XYZ" if only_snet else ""
+        phases["location_residual_s"] = ""
         phases = phases[
             [
                 "event_id",
+                "network",
                 "station",
+                "location",
+                "instrument",
+                "component",
                 "phase_type",
                 "phase_time",
                 "phase_score",
@@ -307,6 +334,7 @@ def process(year, only_snet=True):
                 "distance_km",
                 "azimuth",
                 "takeoff_angle",
+                "location_residual_s",
                 "location_weight",
             ]
         ]
@@ -318,12 +346,11 @@ def process(year, only_snet=True):
         # phases["takeoff_angle"] = phases["takeoff_angle"].str.strip()
         # phases = phases[phases["distance_km"] != ""]
         phases = phases[~(phases["location_weight"] == 0)]
-        phases["location"] = ""
 
         # %%
         phases_ps = []
         event_ids = []
-        for (event_id, station), picks in tqdm(phases.groupby(["event_id", "station"]), desc=phase_filename+" extract complete event"):
+        for (event_id, station), picks in tqdm(phases.groupby(["event_id", "station"]), desc=phase_filename+" cleaning"):
             if len(picks) >= 2:
                 phase_type = picks["phase_type"].unique()
                 if ("P" in phase_type) and ("S" in phase_type):
@@ -354,7 +381,9 @@ if __name__ == "__main__":
     ctx = mp.get_context("spawn")
     # years = range(2023, 2024)[::-1]
     years = range(2021, 2022)[::-1]
-    # ncpu = 16
-    # with ctx.Pool(processes=ncpu) as pool:
-    #     pool.map(process, years)
-    process(2021)
+    stations_info = json.load(open(f"{station_path}/stations.json"))
+    ncpu = 16
+    
+    process_partial = partial(process, stations_info=stations_info, only_snet=True)
+    with ctx.Pool(processes=ncpu) as pool:
+        pool.map(process_partial, years)
