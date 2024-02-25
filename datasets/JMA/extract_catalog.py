@@ -365,9 +365,12 @@ def process(year, stations_info, only_snet=True):
         phases = phases[phases.event_id.isin(event_ids)]
 
         # %%
+        events["time"] = pd.to_datetime(events["time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        phases_ps["phase_time"] = pd.to_datetime(phases_ps["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        phases["phase_time"] = pd.to_datetime(phases["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
         events.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.event.csv", index=False)
-        phases_ps.to_csv(f"{result_path}/catalog/{phase_filename[1:]}_ps.csv", index=False)
-        phases.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.csv", index=False)
+        phases_ps.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.phase_ps.csv", index=False)
+        phases.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.phase.csv", index=False)
 
         # year, month = phase_filename.split("/")[-1].split(".")[0:2]
         # if not os.path.exists(f"{result_path}/catalog/{year}"):

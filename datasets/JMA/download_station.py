@@ -17,7 +17,7 @@ import obspy
 import pandas as pd
 from tqdm import tqdm
 from glob import glob
-from HinetPy import Client, win32
+from HinetPy import Client
 
 os.environ["PATH"] += os.pathsep + os.path.abspath("win32tools/catwin32.src") + os.pathsep + os.path.abspath("win32tools/win2sac.src")
 
@@ -59,14 +59,13 @@ def download_station(client, network: str, result_path):
     elevation = [sta.elevation for sta in stations]
     jma_code = [f"{sta.name[:2]}{sta.name[3]}{sta.name[5:7]}S" for sta in stations] if "snet" in network else name
     instrument = "V" if CODE[network][-1] != "A" else "A"
-    stations_df = pd.DataFrame({'network': NETWORK[network], 'station': name, 'location': '', 'instrument':'V', 'latitude': latitude, 'longitude': longitude, 'elevation_m': elevation})
+    stations_df = pd.DataFrame({'network': NETWORK[network], 'station': name, 'location': '', 'instrument': instrument, 'latitude': latitude, 'longitude': longitude, 'elevation_m': elevation})
     stations_df['depth_km'] = -stations_df['elevation_m'] / 1000
     stations_df['jma_code'] = jma_code
     stations_df['provider'] = 'NIED'
-    stations_config = {row['station']: row.to_dict() for i, row in stations_df.iterrows()}
-    with open(f"{result_path}/stations.json", "w") as f:
-        json.dump(stations_config, f, indent=4)
     stations_df.to_csv(f"{result_path}/stations.csv", index=False)
+    stations_df.set_index("station", inplace=True)
+    stations_df.to_json(f"{result_path}/stations.json", orient="index", indent=2)
 
 
 # %%
@@ -75,10 +74,10 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         network = sys.argv[1:]
     
-    client = Client(timeout=120, retries=6)
     USERNAME = ""
     PASSWORD = ""
-    client.login(USERNAME, PASSWORD)
+    TIMEOUT = 60 # seconds
+    client = Client(user=USERNAME, password=PASSWORD, timeout=TIMEOUT, retries=1)
     
     for net in tqdm(network, desc="Network"):
         download_station(client, net, result_path)
