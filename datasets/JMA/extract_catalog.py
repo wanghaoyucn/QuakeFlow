@@ -204,7 +204,7 @@ def read_phase_line(line, only_snet=True):
         p_phase["phase_type"] = p_phase["p_remark"].strip()[-1]
         p_phase["location_weight"] = p_phase["location_weight"]
         # station code: N.101S -> station: N.S1N01
-        p_phase["station"] = f"{p_phase['station_code'][:2]}S{p_phase['station_code'][2]}N{p_phase['station_code'][3:5]}" if only_snet else p_phase['station_code']
+        p_phase["station_id"] = f"{p_phase['station_code'][:2]}S{p_phase['station_code'][2]}N{p_phase['station_code'][3:5]}" if only_snet else p_phase['station_code']
         phases.append(p_phase)
     start, end = phase_columns["s_remark"]
     if len(line[start:end].strip()) > 0:
@@ -234,7 +234,7 @@ def read_phase_line(line, only_snet=True):
         s_phase["phase_type"] = s_phase["s_remark"].strip()[-1]
         s_phase["location_weight"] = s_phase["location_weight"]
         # station code: N.101S -> station: N.S1N01
-        s_phase["station"] = f"{s_phase['station_code'][:2]}S{s_phase['station_code'][2]}N{s_phase['station_code'][3:5]}" if only_snet else s_phase['station_code']
+        s_phase["station_id"] = f"{s_phase['station_code'][:2]}S{s_phase['station_code'][2]}N{s_phase['station_code'][3:5]}" if only_snet else s_phase['station_code']
         phases.append(s_phase)
 
     return phases
@@ -293,9 +293,9 @@ def process(year, stations_info, only_snet=True):
             events.append(catalog[event_id]["event"])
             phase = pd.DataFrame(catalog[event_id]["picks"])
             phase["event_id"] = event_id
-            assert 'station' in phase.columns, f'{phase_filename} {event_id} {phase.columns}'
+            assert 'station_id' in phase.columns, f'{phase_filename} {event_id} {phase.columns}'
             # calc dist and azimuth with obspy
-            phase["dist_azi"] = phase['station'].apply(
+            phase["dist_azi"] = phase['station_id'].apply(
                 lambda x: obspy.geodetics.base.gps2dist_azimuth(
                     catalog[event_id]["event"]["latitude"], catalog[event_id]["event"]["longitude"], stations_info[x]["latitude"], stations_info[x]["longitude"]
                     ))
@@ -309,11 +309,12 @@ def process(year, stations_info, only_snet=True):
             continue
         phases = pd.concat(phases)
         events = events[["event_id", "time", "latitude", "longitude", "depth_km", "magnitude", "magnitude_type"]]
-        events["event_id"] = events["event_id"].apply(lambda x: "jma" + x)
+        # events["event_id"] = events["event_id"].apply(lambda x: "jma" + x)
         events["time"] = events["time"].apply(lambda x: x + "+09:00")
         # TODO: calculate azimuth, distance_km, find takeoff_angle record？
         phases["takeoff_angle"] = ""
-        phases["network"] = "S-net" if only_snet else "JMA"
+        phases["network"] = phases["station_id"].apply(lambda x: x.split(".")[0])
+        phases["station"] = phases["station_id"].apply(lambda x: x.split(".")[1])
         phases["location"] = ""
         phases["instrument"] = ""
         phases["component"] = "XYZ" if only_snet else ""
@@ -338,7 +339,7 @@ def process(year, stations_info, only_snet=True):
                 "location_weight",
             ]
         ]
-        phases["event_id"] = phases["event_id"].apply(lambda x: "jma" + x)
+        # phases["event_id"] = phases["event_id"].apply(lambda x: "jma" + x)
         phases["phase_time"] = phases["phase_time"].apply(lambda x: x + "+09:00")
         phases["station"] = phases["station"].str.strip()
         phases["phase_polarity"] = phases["phase_polarity"].str.strip()
@@ -365,9 +366,9 @@ def process(year, stations_info, only_snet=True):
         phases = phases[phases.event_id.isin(event_ids)]
 
         # %%
-        events["time"] = pd.to_datetime(events["time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
-        phases_ps["phase_time"] = pd.to_datetime(phases_ps["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
-        phases["phase_time"] = pd.to_datetime(phases["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        #events["time"] = pd.to_datetime(events["time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        #phases_ps["phase_time"] = pd.to_datetime(phases_ps["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        #phases["phase_time"] = pd.to_datetime(phases["phase_time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
         events.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.event.csv", index=False)
         phases_ps.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.phase_ps.csv", index=False)
         phases.to_csv(f"{result_path}/catalog/{phase_filename[1:]}.phase.csv", index=False)
@@ -383,9 +384,9 @@ def process(year, stations_info, only_snet=True):
 if __name__ == "__main__":
     ctx = mp.get_context("spawn")
     # years = range(2023, 2024)[::-1]
-    years = range(2021, 2022)[::-1]
+    years = range(2022, 2023)[::-1]
     stations_info = json.load(open(f"{station_path}/stations.json"))
-    ncpu = 16
+    ncpu = 1
     
     process_partial = partial(process, stations_info=stations_info, only_snet=True)
     with ctx.Pool(processes=ncpu) as pool:

@@ -5,15 +5,21 @@
 # !tar -xvf win32tools.tar.gz
 # !cd win32tools && make
 
+# NOTE: The unit of data in SAC file is in nm/s or nm/s^2
 
 # %%
-import multiprocessing as mp
 import os
+import json
+import time
+import random
 import warnings
 from glob import glob
 from pathlib import Path
+from typing import Dict
+import threading
+from datetime import datetime
 
-import fsspec
+import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import obspy
@@ -24,103 +30,116 @@ from HinetPy import Client, win32
 matplotlib.use("Agg")
 warnings.filterwarnings("ignore")
 os.environ["PATH"] += os.pathsep + os.path.abspath("win32tools/catwin32.src") + os.pathsep + os.path.abspath("win32tools/win2sac.src")
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
 # %%
-root_path = "."
-catalog_path = f"dataset/catalog"
+root_path = "dataset"
+catalog_path = f"{root_path}/catalog"
 station_path = f"{root_path}/station"
-waveform_path = f"{root_path}/waveform"
-# catalog_path = "/quakeflow_dataset/NC/catalog"
-# station_path = "/quakeflow_dataset/NC/FDSNstationXML"
-# waveform_path = "/ncedc-pds/continuous_waveforms"
+waveform_path = f"{root_path}/waveforms"
+raw_data_path = f"{root_path}/win32"
 
-protocol = "gs"
-token = f"{os.environ['HOME']}/.config/gcloud/application_default_credentials.json"
-bucket = "quakeflow_dataset"
-result_path = f"{bucket}/NC"
+network: str = "snet"
+if_accel: bool = True
+
+USERNAME = ""
+PASSWORD = ""
+TIMEOUT = 60 # seconds
+
+CODE = {
+    "hinet": ["0101"],
+    "fnet": ["0103"],
+    "fnetA": ["0103A"],
+    "snet": ["0120"],
+    "snetA": ["0120A"],
+    "mesonet": ["0131"],
+}
 
 
 # %%
-def cut_data(event, phases):
-    arrival_time = phases.loc[event.event_id, "phase_time"].min()
-    begin_time = arrival_time - pd.Timedelta(seconds=35)
-    end_time = arrival_time + pd.Timedelta(seconds=95)
+def download_event(
+    event, phases, client, waveform_path, network_codes=["0120"], time_before=30, time_after=30, lock=None, rank=0
+):
 
-    fs = fsspec.filesystem(protocol=protocol, token=token)
+    max_retry = 6
 
-    for _, pick in phases.loc[event.event_id].iterrows():
-        outfile_path = f"{result_path}/waveform_mseed/{event.time.year}/{event.time.year}.{event.time.dayofyear:03d}/{event.event_id}_{begin_time.strftime('%Y%m%d%H%M%S')}"
-        outfile_name = f"{pick.network}.{pick.station}.{pick.location}.{pick.instrument}.mseed"
-        if fs.exists(f"{outfile_path}/{outfile_name}"):
-            continue
+    arrival_time = phases[phases["phase_type"] == "P"]["phase_time"].min()
+    end_time = phases[phases["phase_type"] == "S"]["phase_time"].max()
+    starttime = (arrival_time - pd.to_timedelta(time_before, unit="s")).replace(tzinfo=None)
+    # wave takes 5 minutes to across the whole network
+    span_min = int(max(5, ((time_before + time_after + end_time-arrival_time).seconds) / 60))
 
-        inv_path = f"{station_path}/{pick.network}.info/{pick.network}.FDSN.xml/{pick.network}.{pick.station}.xml"
-        if not os.path.exists(inv_path):
-            continue
-        inv = obspy.read_inventory(str(inv_path))
+    print(f"Downloading {event.event_id} ...")
+    outdir = f"{waveform_path}/{event['event_id']}"
 
-        begin_mseed_path = f"{waveform_path}/{pick.network}/{begin_time.year}/{begin_time.year}.{begin_time.dayofyear:03d}/{pick.station}.{pick.network}.{pick.instrument}?.{pick.location}.?.{begin_time.year}.{begin_time.dayofyear:03d}"
-        end_mseed_path = f"{waveform_path}/{pick.network}/{end_time.year}/{end_time.year}.{end_time.dayofyear:03d}/{pick.station}.{pick.network}.{pick.instrument}?.{pick.location}.?.{end_time.year}.{end_time.dayofyear:03d}"
-        try:
-            st = obspy.Stream()
-            for mseed_path in set([begin_mseed_path, end_mseed_path]):
-                st += obspy.read(str(mseed_path))
-        except Exception as e:
-            print(e)
-            continue
+    if os.path.exists(outdir):
+        print(f"{outdir} already exists. Skip.")
+        return
 
-        if len(st) == 0:
-            continue
+    for code in network_codes:
+        retry = 0
+        while retry < max_retry:
+            try:
+                data, ctable = client.get_continuous_waveform(code, starttime, span=span_min, outdir=outdir.replace("waveforms", "win32"), threads=3)
+                win32.extract_sac(data, ctable, outdir=outdir)
 
-        try:
-            st.merge(fill_value="latest")
-            st.remove_sensitivity(inv)
-            st.detrend("constant")
-            st.trim(obspy.UTCDateTime(begin_time), obspy.UTCDateTime(end_time), pad=True, fill_value=0)
-        except Exception as e:
-            print(e)
-            continue
+                break
 
-        # float64 to float32
-        for tr in st:
-            tr.data = tr.data.astype("float32")
+            except Exception as err:
+                err = str(err).rstrip("\n")
+                message = "No data available for request"
+                if err[: len(message)] == message:
+                    print(f"{message}: {event['event_id']}")
+                    break
+                else:
+                    print(f"Error occurred:\n{err}\nRetrying...")
+                retry += 1
+                time.sleep(20 ** ((random.random() + 1)))
+                continue
 
-        if not fs.exists(outfile_path):
-            fs.makedirs(outfile_path)
-
-        with fs.open(f"{outfile_path}/{outfile_name}", "wb") as f:
-            st.write(f, format="MSEED")
-
-        # st.plot(outfile=outfile_path / f"{pick.network}.{pick.station}.{pick.location}.{pick.instrument}.png")
-        # outfile_path = (
-        #     f"{result_path}/figure/{event.time.year}/{event.time.year}.{event.time.dayofyear:03d}/{event.event_id}"
-        # )
-        # if not os.path.exists(outfile_path):
-        #     os.makedirs(outfile_path)
-        # st.plot(outfile=f"{outfile_path}/{pick.network}.{pick.station}.{pick.location}.{pick.instrument}.png")
-
-    return 0
+        if retry == max_retry:
+            print(f"Failed to download {event['event_id']} after {max_retry} retries.")
+            os.system(f"touch {str(event['event_id'])+'.failed'}")
 
 
 # %%
 if __name__ == "__main__":
-    ncpu = min(mp.cpu_count() * 4, 32)
+    
+    client = Client(user=USERNAME, password=PASSWORD, timeout=TIMEOUT, retries=1)
+
+    if not os.path.exists(f"{waveform_path}"):
+        os.makedirs(f"{waveform_path}")
+    if not os.path.exists(f"{raw_data_path}"):
+        os.makedirs(f"{raw_data_path}")
+        
     event_list = sorted(list(glob(f"{catalog_path}/*.event.csv")))[::-1]
-    start_year = "1967"
+    start_year = "2022"
     end_year = "2023"
     tmp = []
     for event_file in event_list:
         if (
-            event_file.split("/")[-1].split(".")[0] >= start_year
-            and event_file.split("/")[-1].split(".")[0] <= end_year
+            event_file.split("/")[-1].split(".")[0][:4] >= start_year
+            and event_file.split("/")[-1].split(".")[0][:4] <= end_year
         ):
             tmp.append(event_file)
     event_list = sorted(tmp, reverse=True)
+    
+    network_codes = CODE[network]
+    if if_accel:
+        try:
+            network_codes+=CODE[network+"A"]
+        except:
+            print(f"{network} does not have acceleration sensors.")
+    
+  
+    with open(f"{station_path}/stations.json") as f:
+            stations = json.load(f)
+    stations = {key: station for key, station in stations.items()}
 
     for event_file in event_list:
         print(event_file)
         events = pd.read_csv(event_file, parse_dates=["time"])
+        events['time'] = pd.to_datetime(events['time'], utc=True).dt.tz_convert('Asia/Tokyo')
+        events['time'] = events['time'].dt.tz_localize(None)
         phases = pd.read_csv(
             f"{event_file.replace('event.csv', 'phase.csv')}",
             parse_dates=["phase_time"],
@@ -129,13 +148,32 @@ if __name__ == "__main__":
         phases = phases.loc[
             phases.groupby(["event_id", "network", "station", "location", "instrument"]).phase_time.idxmin()
         ]
+        phases['time'] = pd.to_datetime(phases['phase_time'], utc=True).dt.tz_convert('Asia/Tokyo')
+        phases['time'] = phases['time'].dt.tz_localize(None)
         phases.set_index("event_id", inplace=True)
 
         events = events[events.event_id.isin(phases.index)]
-        pbar = tqdm(events, total=len(events))
-        with mp.get_context("spawn").Pool(ncpu) as p:
+        #pbar = tqdm(events, total=len(events))
+        
+        for _, event in events.iterrows():
+            threads = []
+            MAX_THREADS = 1
+            TIME_BEFORE = 30
+            TIME_AFTER = 90
+            lock = threading.Lock()
+            events = events.sort_values(by="time", ignore_index=True, ascending=False)
             for _, event in events.iterrows():
-                p.apply_async(cut_data, args=(event, phases.loc[event.event_id]), callback=lambda _: pbar.update(1))
-            p.close()
-            p.join()
-        pbar.close()
+                t = threading.Thread(
+                    target=download_event,
+                    args=(event, phases.loc[event.event_id], client, waveform_path, network_codes, TIME_BEFORE, TIME_AFTER, lock, len(threads)),
+                )
+                t.start()
+                threads.append(t)
+                time.sleep(1)
+                if (len(threads) - 1) % MAX_THREADS == (MAX_THREADS - 1):
+                    for t in threads:
+                        t.join()
+                    threads = []
+            for t in threads:
+                t.join()
+        #pbar.close()

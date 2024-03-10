@@ -2,20 +2,24 @@ import os
 import sys
 from glob import glob
 
-def download_hypocenter(year, output_dir="dataset/hypocenter"):
+def download_hypocenter(year, month, output_dir="dataset/hypocenter"):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    if os.path.exists(f"{output_dir}/h{year}"):
+    if year >= 2022:
+        file_name = f"h{year}{month:02}"
+    else:
+        file_name = f"h{year}"
+    if os.path.exists(f"{output_dir}/{file_name}"):
         print(f"File h{year} already exists, skipping download")
         return
-    print(f"Downloading hypocenter data for {year}")
+    print(f"Downloading hypocenter data for {file_name[1:]}")
     # Download the file
-    if not os.path.exists(f"{output_dir}/h{year}.zip"):
-        print(f"Downloading h{year}.zip")
-        os.system(f"wget https://www.data.jma.go.jp/svd/eqev/data/bulletin/data/hypo/h{year}.zip -P {output_dir}")
+    if not os.path.exists(f"{output_dir}/{file_name}.zip"):
+        print(f"Downloading {file_name}.zip")
+        os.system(f"wget https://www.data.jma.go.jp/svd/eqev/data/bulletin/data/hypo/{file_name}.zip -P {output_dir}")
     else:
-        print(f"File h{year}.zip already exists, skipping download")
-    os.system(f"unzip {os.path.join(output_dir, f'h{year}.zip')} -d {output_dir}")
+        print(f"File {file_name}.zip already exists, skipping download")
+    os.system(f"unzip {os.path.join(output_dir, f'{file_name}.zip')} -d {output_dir}")
     
     return  
     
@@ -60,9 +64,12 @@ if __name__ == "__main__":
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
-    years = range(2021, 2022)
+    years = range(2022, 2023)
     for year in years:
-        download_hypocenter(year, output_dir=os.path.join(result_path, "hypocenter"))
-        for month in range(1, 2):
+        if year < 2022:
+            download_hypocenter(year, output_dir=os.path.join(result_path, "hypocenter"))
+        for month in range(8, 9):
+            if year >= 2022:
+                download_hypocenter(year, month, output_dir=os.path.join(result_path, "hypocenter"))
             download_mechanism(year, month, output_dir=os.path.join(result_path, "mechanism"))
             download_arrivaltime(year, month, output_dir=os.path.join(result_path, "arrivaltime"))

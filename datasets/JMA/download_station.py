@@ -54,17 +54,19 @@ def download_station(client, network: str, result_path):
     
     stations = client.get_station_list(CODE[network])
     name = [sta.name for sta in stations]
+    net = [name.split(".")[0] for name in name]
+    station = [name.split(".")[1] for name in name]
     latitude = [sta.latitude for sta in stations]
     longitude = [sta.longitude for sta in stations]
     elevation = [sta.elevation for sta in stations]
     jma_code = [f"{sta.name[:2]}{sta.name[3]}{sta.name[5:7]}S" for sta in stations] if "snet" in network else name
     instrument = "V" if CODE[network][-1] != "A" else "A"
-    stations_df = pd.DataFrame({'network': NETWORK[network], 'station': name, 'location': '', 'instrument': instrument, 'latitude': latitude, 'longitude': longitude, 'elevation_m': elevation})
+    stations_df = pd.DataFrame({'station_id':name, 'network': net, 'station': station, 'location': '', 'instrument': instrument, 'latitude': latitude, 'longitude': longitude, 'elevation_m': elevation})
     stations_df['depth_km'] = -stations_df['elevation_m'] / 1000
     stations_df['jma_code'] = jma_code
     stations_df['provider'] = 'NIED'
     stations_df.to_csv(f"{result_path}/stations.csv", index=False)
-    stations_df.set_index("station", inplace=True)
+    stations_df.set_index("station_id", inplace=True)
     stations_df.to_json(f"{result_path}/stations.json", orient="index", indent=2)
 
 
@@ -74,8 +76,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         network = sys.argv[1:]
     
-    USERNAME = ""
-    PASSWORD = ""
+    USERNAME = "haoyuwangPKU"
+    PASSWORD = "kkk5580680"
     TIMEOUT = 60 # seconds
     client = Client(user=USERNAME, password=PASSWORD, timeout=TIMEOUT, retries=1)
     
