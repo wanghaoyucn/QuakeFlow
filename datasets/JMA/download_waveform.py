@@ -5,7 +5,8 @@
 # !tar -xvf win32tools.tar.gz
 # !cd win32tools && make
 
-# NOTE: The unit of data in SAC file is in nm/s or nm/s^2
+# NOTE: The unit of data in SAC file is in nm/s or nm/s^2 (1e-9m/s)
+# NOTE: func `get_continuous_waveform` will ignore the second in `starttime` and set it to 0
 
 # %%
 import os
@@ -50,7 +51,7 @@ CODE = {
     "fnet": ["0103"],
     "fnetA": ["0103A"],
     "snet": ["0120"],
-    "snetA": ["0120A"],
+    "snetA": ["0120A", "0120B", "0120C"],
     "mesonet": ["0131"],
 }
 
@@ -66,14 +67,23 @@ def download_event(
     end_time = phases[phases["phase_type"] == "S"]["phase_time"].max()
     starttime = (arrival_time - pd.to_timedelta(time_before, unit="s")).replace(tzinfo=None)
     # wave takes 5 minutes to across the whole network
-    span_min = int(max(5, ((time_before + time_after + end_time-arrival_time).seconds) / 60))
+    #try:
+    #    span_min = int(max(5, ((time_before + time_after + end_time-arrival_time).seconds) / 60))
+    #except:
+    span_min = 5
 
     print(f"Downloading {event.event_id} ...")
-    outdir = f"{waveform_path}/{event['event_id']}"
+    outdir = f"{waveform_path}/{starttime.strftime('%Y%m')}/{starttime.strftime('%Y.%j')}/{event['event_id']}"
+    os.makedirs(f"{waveform_path}/{starttime.strftime('%Y%m')}", exist_ok=True)
+    os.makedirs(f"{waveform_path}/{starttime.strftime('%Y%m')}/{starttime.strftime('%Y.%j')}", exist_ok=True)
+    os.makedirs(f"{waveform_path.replace('waveforms', 'win32')}/{starttime.strftime('%Y%m')}", exist_ok=True)
+    os.makedirs(f"{waveform_path.replace('waveforms', 'win32')}/{starttime.strftime('%Y%m')}/{starttime.strftime('%Y.%j')}", exist_ok=True)
 
     if os.path.exists(outdir):
         print(f"{outdir} already exists. Skip.")
         return
+    #os.makedirs(outdir, exist_ok=True)
+    #os.makedirs(outdir.replace("waveforms", "win32"), exist_ok=True)
 
     for code in network_codes:
         retry = 0

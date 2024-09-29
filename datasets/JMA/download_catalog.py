@@ -2,10 +2,10 @@ import os
 import sys
 from glob import glob
 
-def download_hypocenter(year, month, output_dir="dataset/hypocenter"):
+def download_hypocenter(year, month=None, output_dir="dataset/hypocenter"):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    if year >= 2022:
+    if year >= 2023:
         file_name = f"h{year}{month:02}"
     else:
         file_name = f"h{year}"
@@ -16,10 +16,14 @@ def download_hypocenter(year, month, output_dir="dataset/hypocenter"):
     # Download the file
     if not os.path.exists(f"{output_dir}/{file_name}.zip"):
         print(f"Downloading {file_name}.zip")
-        os.system(f"wget https://www.data.jma.go.jp/svd/eqev/data/bulletin/data/hypo/{file_name}.zip -P {output_dir}")
+        success = os.system(f"wget https://www.data.jma.go.jp/svd/eqev/data/bulletin/data/hypo/{file_name}.zip -P {output_dir}")
+        if success != 0:
+            print(f"Failed to download {file_name}.zip")
+        else:
+            os.system(f"unzip {os.path.join(output_dir, f'{file_name}.zip')} -d {output_dir}")
     else:
         print(f"File {file_name}.zip already exists, skipping download")
-    os.system(f"unzip {os.path.join(output_dir, f'{file_name}.zip')} -d {output_dir}")
+        os.system(f"unzip {os.path.join(output_dir, f'{file_name}.zip')} -d {output_dir}")
     
     return  
     
@@ -64,12 +68,12 @@ if __name__ == "__main__":
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
-    years = range(2022, 2023)
+    years = range(2016, 2024)
     for year in years:
-        if year < 2022:
+        if year < 2023:
             download_hypocenter(year, output_dir=os.path.join(result_path, "hypocenter"))
-        for month in range(8, 9):
-            if year >= 2022:
+        for month in range(1, 13):
+            if year >= 2023:
                 download_hypocenter(year, month, output_dir=os.path.join(result_path, "hypocenter"))
             download_mechanism(year, month, output_dir=os.path.join(result_path, "mechanism"))
             download_arrivaltime(year, month, output_dir=os.path.join(result_path, "arrivaltime"))

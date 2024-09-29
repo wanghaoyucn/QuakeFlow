@@ -5,3 +5,5 @@ waveform_h5
 waveform_ps_h5
 *.h5
 FDSNstationXML
+win32tools
+!SRL_Table_S2.csv
